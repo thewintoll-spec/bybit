@@ -1,0 +1,5 @@
+{
+  "name": "Bybit AI Auto-Trader (Sim)",
+  "description": "A React-based trading dashboard that utilizes the Gemini API to analyze real-time market patterns and execute automated simulated trades on a Bybit-style interface.",
+  "requestFramePermissions": []
+}

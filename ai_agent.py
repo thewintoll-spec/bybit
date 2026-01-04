@@ -62,6 +62,7 @@ logger = setup_logger()
 # .env 파일 로드 및 API 키 설정
 load_dotenv()
 LM_STUDIO_ENDPOINT = "http://localhost:1234/v1/chat/completions"
+LM_STUDIO_MODEL_NAME = os.getenv('LM_STUDIO_MODEL_NAME')
 BYBIT_API_KEY = os.getenv('BYBIT_API_KEY')
 BYBIT_API_SECRET = os.getenv('BYBIT_API_SECRET')
 
@@ -155,6 +156,8 @@ Here is the latest 15-minute candle data for BTCUSDT:
 """
     messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
     payload = {"messages": messages, "temperature": 0.5, "max_tokens": 300} # max_tokens 증가
+    if LM_STUDIO_MODEL_NAME:
+        payload['model'] = LM_STUDIO_MODEL_NAME
     try:
         response = requests.post(LM_STUDIO_ENDPOINT, headers=headers, json=payload, timeout=60)
         response.raise_for_status()
@@ -281,6 +284,23 @@ def _place_order_common(session: HTTP, decision_data: dict, latest_data: pd.Seri
         notional_value = margin_to_use * Decimal(leverage) if not is_adding else margin_to_use
         
         current_price = Decimal(str(latest_data['close']))
+        
+        # TP/SL 가격 유효성 검사
+        if side == "Buy": # 롱 포지션
+            if sl_price >= float(current_price):
+                logger.error(f"주문 오류(롱): 손절가({sl_price})는 현재가({current_price})보다 낮아야 합니다. 주문을 취소합니다.")
+                return
+            if tp_price <= float(current_price):
+                logger.error(f"주문 오류(롱): 익절가({tp_price})는 현재가({current_price})보다 높아야 합니다. 주문을 취소합니다.")
+                return
+        elif side == "Sell": # 숏 포지션
+            if sl_price <= float(current_price):
+                logger.error(f"주문 오류(숏): 손절가({sl_price})는 현재가({current_price})보다 높아야 합니다. 주문을 취소합니다.")
+                return
+            if tp_price >= float(current_price):
+                logger.error(f"주문 오류(숏): 익절가({tp_price})는 현재가({current_price})보다 낮아야 합니다. 주문을 취소합니다.")
+                return
+        
         preliminary_qty = notional_value / current_price
         
         instrument_info = session.get_instruments_info(category="linear", symbol="BTCUSDT")['result']['list'][0]

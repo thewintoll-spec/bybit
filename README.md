@@ -56,7 +56,7 @@ LM_STUDIO_MODEL_NAME="YOUR_LM_STUDIO_MODEL_NAME" # (예: "gemma-2b-it-q8_0.gguf"
 
 ## 사용법
 
-1.  **LM Studio 서버 실행**: 자동매매 봇을 실행하기 전에, 반드시 LM Studio를 열고 **Local Server** 탭에서 모델을 로드한 후 서버를 시작해야 합니다.
+1.  **LM Studio 서버 실행**: 자동매매 봇을 실행하기 전에, 반드시 LM Studio를 열고 **Developer** 탭에서 모델을 로드한 후 서버를 시작해야 합니다.
 
 2.  **자동매매 봇 실행**: 터미널에서 다음 명령어를 실행합니다.
 

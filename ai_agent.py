@@ -67,7 +67,7 @@ BYBIT_API_KEY = os.getenv('BYBIT_API_KEY')
 BYBIT_API_SECRET = os.getenv('BYBIT_API_SECRET')
 
 
-def get_ai_decision(market_df: pd.DataFrame, current_pos_side: str) -> dict:
+def get_ai_decision(market_df: pd.DataFrame, current_pos_side: str, symbol: str) -> dict:
     """
     LM Studio AI 에이전트에게 시장 데이터와 현재 포지션 정보를 기반으로 매매 결정을 요청합니다.
     """
@@ -150,7 +150,7 @@ Now, analyze the following user-provided data and provide your response.
     position_prompt = f"My current position is: {current_pos_side if current_pos_side else 'None'}"
 
     user_prompt = f"""
-Here is the latest 15-minute candle data for BTCUSDT:
+Here is the latest 15-minute candle data for {symbol}:
 {data_prompt}
 {position_prompt}
 """
@@ -217,7 +217,7 @@ def close_all_positions(session: HTTP, symbol="BTCUSDT") -> bool:
         logger.error(f"포지션 청산 중 예외 발생: {e}", exc_info=True)
         return False
 
-def _place_order_common(session: HTTP, decision_data: dict, latest_data: pd.Series, is_adding: bool):
+def _place_order_common(session: HTTP, decision_data: dict, latest_data: pd.Series, is_adding: bool, symbol: str):
     """
     신규 주문 또는 추가 주문을 위한 공통 로직을 처리합니다.
     """
@@ -257,7 +257,7 @@ def _place_order_common(session: HTTP, decision_data: dict, latest_data: pd.Seri
             leverage_str = str(leverage)
             logger.info(f"AI 결정에 따라 레버리지를 {leverage_str}배로 설정합니다...")
             try:
-                session.set_leverage(category="linear", symbol="BTCUSDT", buyLeverage=leverage_str, sellLeverage=leverage_str)
+                session.set_leverage(category="linear", symbol=symbol, buyLeverage=leverage_str, sellLeverage=leverage_str)
                 logger.info("레버리지 설정 완료.")
             except InvalidRequestError as e:
                 if "110043" in str(e):
@@ -303,7 +303,7 @@ def _place_order_common(session: HTTP, decision_data: dict, latest_data: pd.Seri
         
         preliminary_qty = notional_value / current_price
         
-        instrument_info = session.get_instruments_info(category="linear", symbol="BTCUSDT")['result']['list'][0]
+        instrument_info = session.get_instruments_info(category="linear", symbol=symbol)['result']['list'][0]
         qty_step = Decimal(instrument_info['lotSizeFilter']['qtyStep'])
         adjusted_qty = round(preliminary_qty / qty_step) * qty_step
         final_qty_str = f"{adjusted_qty:.{abs(qty_step.as_tuple().exponent)}f}"
@@ -314,12 +314,12 @@ def _place_order_common(session: HTTP, decision_data: dict, latest_data: pd.Seri
 
         order_type_msg = "신규" if not is_adding else "추가"
         logger.info(f"AI 추천: 증거금 사용률 {trade_size_percentage}% / TP: {tp_price} / SL: {sl_price}")
-        logger.info(f"{order_type_msg} 주문: {ai_decision} {final_qty_str} BTC (사용 증거금: 약 {margin_to_use:.2f} USDT)")
+        logger.info(f"{order_type_msg} 주문: {ai_decision} {final_qty_str} {symbol[:-4]} (사용 증거금: 약 {margin_to_use:.2f} USDT)")
 
         # 주문 실행
         order = session.place_order(
             category="linear",
-            symbol="BTCUSDT",
+            symbol=symbol,
             side=side,
             orderType="Market",
             qty=final_qty_str,
@@ -335,7 +335,7 @@ def _place_order_common(session: HTTP, decision_data: dict, latest_data: pd.Seri
     except Exception as e:
         logger.error(f"주문 실행 중 예외 발생: {e}", exc_info=True)
 
-def execute_futures_trade(session: HTTP, decision_data: dict, market_df: pd.DataFrame, current_pos_side: str, current_pos_size: Decimal):
+def execute_futures_trade(session: HTTP, decision_data: dict, market_df: pd.DataFrame, current_pos_side: str, current_pos_size: Decimal, symbol: str):
     """
     AI 결정과 현재 포지션에 따라 지능적으로 매매를 실행합니다.
     """
@@ -352,7 +352,7 @@ def execute_futures_trade(session: HTTP, decision_data: dict, market_df: pd.Data
     if ai_decision == 'CLOSE':
         if current_pos_side:
             logger.info(f"AI 결정: CLOSE. 현재 {current_pos_side} 포지션을 청산합니다.")
-            close_all_positions(session)
+            close_all_positions(session, symbol=symbol)
         else:
             logger.info("AI 결정: CLOSE. 청산할 포지션이 없습니다.")
         return
@@ -364,7 +364,7 @@ def execute_futures_trade(session: HTTP, decision_data: dict, market_df: pd.Data
             # 필요시 포지션 전환 로직 추가 (예: close_all_positions 후 신규 진입)
         else:
             logger.info(f"AI 결정: {ai_decision}. 신규 포지션에 진입합니다.")
-            _place_order_common(session, decision_data, latest_data, is_adding=False)
+            _place_order_common(session, decision_data, latest_data, is_adding=False, symbol=symbol)
         return
 
     # 추가 진입 (ADD_TO_LONG 또는 ADD_TO_SHORT)
@@ -373,10 +373,10 @@ def execute_futures_trade(session: HTTP, decision_data: dict, market_df: pd.Data
         if not current_pos_side:
             logger.warning(f"AI가 추가 진입({ai_decision})을 원하지만, 보유 포지션이 없습니다. 신규 진입으로 처리합니다.")
             decision_data['decision'] = f"NEW_{expected_side}" # 결정을 신규 진입으로 변경
-            _place_order_common(session, decision_data, latest_data, is_adding=False)
+            _place_order_common(session, decision_data, latest_data, is_adding=False, symbol=symbol)
         elif current_pos_side == expected_side:
             logger.info(f"AI 결정: {ai_decision}. 현재 {current_pos_side} 포지션에 추가 진입합니다.")
-            _place_order_common(session, decision_data, latest_data, is_adding=True)
+            _place_order_common(session, decision_data, latest_data, is_adding=True, symbol=symbol)
         else:
             logger.error(f"AI가 {expected_side} 포지션에 추가 진입을 원하지만, 현재 보유 포지션은 {current_pos_side} 입니다. 주문을 실행하지 않습니다.")
         return
@@ -385,8 +385,8 @@ def execute_futures_trade(session: HTTP, decision_data: dict, market_df: pd.Data
     if current_pos_side and ((current_pos_side == 'LONG' and ai_decision == 'NEW_SHORT') or \
                             (current_pos_side == 'SHORT' and ai_decision == 'NEW_LONG')):
         logger.info(f"AI 결정: {ai_decision}. 포지션 전환을 위해 현재 {current_pos_side} 포지션을 종료하고 신규 진입합니다.")
-        if close_all_positions(session):
-            _place_order_common(session, decision_data, latest_data, is_adding=False)
+        if close_all_positions(session, symbol=symbol):
+            _place_order_common(session, decision_data, latest_data, is_adding=False, symbol=symbol)
         else:
             logger.error("포지션 전환 실패: 기존 포지션 청산에 실패했습니다.")
         return
@@ -395,8 +395,19 @@ def main():
     """
     메인 자동매매 로직 실행
     """
+    # 심볼 선택
+    symbol_map = {"1": "BTCUSDT", "2": "ETHUSDT"}
+    
+    while True:
+        choice = input("거래할 심볼을 선택하세요 (1: BTCUSDT, 2: ETHUSDT): ")
+        if choice in symbol_map:
+            symbol = symbol_map[choice]
+            break
+        else:
+            print("잘못된 선택입니다. 1 또는 2를 입력해주세요.")
+
     logger.info("="*60)
-    logger.info("Bybit 지능형 자동매매 봇을 시작합니다. (종료: Ctrl+C)")
+    logger.info(f"Bybit 지능형 자동매매 봇 ({symbol})을 시작합니다. (종료: Ctrl+C)")
     logger.info("="*60)
     
     if not all([BYBIT_API_KEY, BYBIT_API_SECRET]):
@@ -415,10 +426,10 @@ def main():
     while True:
         try:
             logger.info("-" * 60)
-            logger.info("새로운 매매 사이클 시작...")
+            logger.info(f"새로운 매매 사이클 시작 ({symbol})...")
             
             # 1. 시장 데이터 가져오기
-            market_df = get_market_data_manual_ta()
+            market_df = get_market_data_manual_ta(symbol=symbol)
             if market_df is None or market_df.empty:
                 logger.error("시장 데이터를 가져오지 못했습니다. 다음 사이클까지 대기합니다.")
                 time.sleep(60)
@@ -433,21 +444,21 @@ def main():
             logger.info("최신 시장 데이터 확인 완료.")
 
             # 2. 현재 포지션 확인
-            current_pos_side, current_pos_size = get_current_position(bybit_session)
+            current_pos_side, current_pos_size = get_current_position(bybit_session, symbol=symbol)
             if current_pos_side:
-                logger.info(f"현재 포지션: {current_pos_side} (크기: {current_pos_size})")
+                logger.info(f"현재 {symbol} 포지션: {current_pos_side} (크기: {current_pos_size})")
             else:
-                logger.info("현재 보유 포지션 없음.")
+                logger.info(f"현재 {symbol} 보유 포지션 없음.")
 
             # 3. AI에게 매매 결정 요청
             logger.info("AI 에이전트에게 매매 결정을 요청하는 중...")
-            ai_result = get_ai_decision(market_df, current_pos_side)
+            ai_result = get_ai_decision(market_df, current_pos_side, symbol=symbol)
 
             # 4. AI 결정에 따른 거래 실행
             if ai_result:
                 decision_details = f"🤖 AI 결정: " + ", ".join(f"'{k}': '{v}'" for k, v in ai_result.items())
                 logger.info(decision_details)
-                execute_futures_trade(bybit_session, ai_result, market_df, current_pos_side, current_pos_size)
+                execute_futures_trade(bybit_session, ai_result, market_df, current_pos_side, current_pos_size, symbol=symbol)
             else:
                 logger.error("AI로부터 유효한 결정을 받아오지 못했습니다.")
 

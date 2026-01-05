@@ -71,7 +71,18 @@ def get_market_data_manual_ta(symbol="BTCUSDT", interval=15, limit=200):
         return None
 
 if __name__ == '__main__':
-    market_df = get_market_data_manual_ta()
-    if market_df is not None:
+    # BTC 데이터 테스트
+    print("--- BTCUSDT 데이터 테스트 ---")
+    market_df_btc = get_market_data_manual_ta(symbol="BTCUSDT")
+    if market_df_btc is not None:
         print("BTCUSDT 선물 15분봉 데이터 및 수동 계산된 기술 지표:")
-        print(market_df)
+        print(market_df_btc.tail())
+    
+    print("\n" + "="*50 + "\n")
+
+    # ETH 데이터 테스트
+    print("--- ETHUSDT 데이터 테스트 ---")
+    market_df_eth = get_market_data_manual_ta(symbol="ETHUSDT")
+    if market_df_eth is not None:
+        print("ETHUSDT 선물 15분봉 데이터 및 수동 계산된 기술 지표:")
+        print(market_df_eth.tail())

@@ -1,14 +1,14 @@
-# Bybit 지능형 자동매매 봇
+# Bybit 지능형 자동매매 봇 및 P&L 리포터
 
-LM Studio와 Bybit API를 활용하여 BTCUSDT 및 ETHUSDT 선물을 자동으로 매매하는 지능형 트레이딩 봇입니다. AI 에이전트가 시장 데이터를 분석하여 매매 결정을 내립니다.
+LM Studio와 Bybit API를 활용하여 BTCUSDT 및 ETHUSDT 선물을 자동으로 매매하고, 거래 내역을 분석하여 일간, 주간, 월간 P&L 보고서를 생성하는 프로젝트입니다.
 
 ## 주요 기능
 
-- **AI 기반 매매 결정**: 로컬에서 실행되는 LM Studio의 언어 모델을 통해 시장 데이터를 분석하고 매매 결정을 내립니다.
-- **다중 암호화폐 지원**: BTCUSDT와 ETHUSDT 거래를 지원합니다.
+- **AI 기반 매매 결정**: 로컬에서 실행되는 LM Studio의 언어 모델을 통해 시장 데이터를 분석하고 매매 결정을 내립니다. (`ai_agent.py`)
 - **자동 포지션 관리**: AI의 결정에 따라 자동으로 신규 주문, 추가 주문, 포지션 종료 등을 실행합니다.
-- **레버리지 및 TP/SL 설정**: AI가 제안하는 레버리지, 익절(Take Profit), 손절(Stop Loss) 가격을 주문에 자동으로 적용합니다.
-- **실시간 로깅**: 모든 매매 활동과 AI의 결정 과정을 로그 파일(`trading_bot.log`)에 기록하여 추적할 수 있습니다.
+- **상세한 P&L 리포트**: 거래 내역을 집계하여 일간, 주간, 월간 수익률 보고서를 생성합니다. (`summarize_pnl.py`)
+- **사용자 맞춤 수익률 계산**: 초기 자본을 직접 입력받아 실제 투자 대비 수익률을 계산합니다.
+- **보고서 자동화**: Windows 작업 스케줄러를 사용하여 매일 자동으로 보고서를 생성할 수 있습니다.
 
 ## 설치 방법
 
@@ -21,8 +21,6 @@ cd bybit
 
 ### 2. 가상 환경 생성 및 활성화
 
-프로젝트 의존성을 시스템에 직접 설치하지 않고 격리된 환경에 설치하는 것이 좋습니다.
-
 ```bash
 # Windows
 python -m venv venv
@@ -34,8 +32,6 @@ source venv/bin/activate
 ```
 
 ### 3. 의존성 설치
-
-`requirements.txt` 파일에 명시된 라이브러리들을 설치합니다.
 
 ```bash
 pip install -r requirements.txt
@@ -50,33 +46,84 @@ BYBIT_API_KEY="YOUR_BYBIT_API_KEY"
 BYBIT_API_SECRET="YOUR_BYBIT_API_SECRET"
 LM_STUDIO_MODEL_NAME="YOUR_LM_STUDIO_MODEL_NAME" # (예: "gemma-2b-it-q8_0.gguf")
 ```
+- API 키는 **Unified Trading** 계정용이어야 합니다.
 
-- `YOUR_BYBIT_API_KEY`, `YOUR_BYBIT_API_SECRET`: Bybit에서 발급받은 API 키와 시크릿 키로 교체하세요. (테스트넷 또는 데모 계정 권장)
-- `YOUR_LM_STUDIO_MODEL_NAME`: 사용하려는 LM Studio 모델의 이름을 입력합니다. 이 값은 LM Studio 서버 로그에서 확인할 수 있습니다.
+---
 
-## 사용법
+## 사용법 - 자동매매 봇
 
 1.  **LM Studio 서버 실행**: 자동매매 봇을 실행하기 전에, 반드시 LM Studio를 열고 **Developer** 탭에서 모델을 로드한 후 서버를 시작해야 합니다.
-
 2.  **자동매매 봇 실행**: 터미널에서 다음 명령어를 실행합니다.
-
     ```bash
     python ai_agent.py
     ```
-
 3.  **심볼 선택**: 프로그램이 시작되면 거래할 암호화폐를 선택하라는 메시지가 표시됩니다.
-    - `1`을 입력하면 **BTCUSDT** 거래를 시작합니다.
-    - `2`를 입력하면 **ETHUSDT** 거래를 시작합니다.
 
-    봇은 15분마다 새로운 시장 데이터를 가져와 AI에게 분석을 요청하고, 그 결정에 따라 매매를 실행합니다.
+봇을 종료하려면 터미널에서 `Ctrl+C`를 누르세요.
 
-    봇을 종료하려면 터미널에서 `Ctrl+C`를 누르세요.
+---
 
-## 병렬 실행 (BTC와 ETH 동시 거래)
+## 사용법 - P&L 보고서 생성
 
-BTC와 ETH를 동시에 거래하고 싶다면, 터미널(CLI)을 두 개 열고 각각의 터미널에서 봇을 개별적으로 실행하면 됩니다.
+P&L 보고서는 두 단계로 생성됩니다. 먼저 거래 데이터를 가져온 후, 해당 데이터를 바탕으로 요약 보고서를 생성합니다.
 
-- **터미널 1**: `python ai_agent.py` 실행 후 `1` (BTCUSDT) 선택
-- **터미널 2**: `python ai_agent.py` 실행 후 `2` (ETHUSDT) 선택
+### 1. 거래 데이터 가져오기 (`get_pnl.py`)
 
-이렇게 하면 두 개의 독립적인 봇이 각각의 암호화폐를 동시에 거래하게 됩니다.
+Bybit API를 통해 모든 거래 내역을 가져와 `reports/pnl.csv` 파일에 저장합니다. 이 스크립트는 보고서 생성이 필요할 때마다 실행하여 최신 데이터를 유지할 수 있습니다.
+
+```bash
+python get_pnl.py
+```
+
+### 2. 요약 보고서 생성 (`summarize_pnl.py`)
+
+`pnl.csv` 파일을 분석하여 상세한 통계가 포함된 Markdown 형식의 보고서를 생성합니다.
+
+**기본 사용법 (오늘 날짜의 일일 보고서 생성):**
+```bash
+python summarize_pnl.py
+```
+
+**옵션:**
+- `--period`: 보고서 기간을 선택합니다. (`daily`, `weekly`, `monthly`, 기본값: `daily`)
+- `--date YYYY-MM-DD`: 보고서의 기준 날짜를 지정합니다. (기본값: 오늘)
+
+**초기 자본 입력:**
+스크립트를 실행하면 초기 자본을 입력하라는 메시지가 표시됩니다. 자본을 입력하면 보고서에 **초기 자본 대비 수익률**이 포함됩니다. 입력하지 않고 Enter를 누르면 해당 항목은 표시되지 않습니다.
+
+**사용 예시:**
+
+- **오늘의 일일 보고서 생성:**
+  ```bash
+  python summarize_pnl.py
+  # 초기 자본을 입력하라는 메시지가 표시됨
+  ```
+
+- **2026년 1월 6일의 일일 보고서 생성:**
+  ```bash
+  python summarize_pnl.py --period daily --date 2026-01-06
+  ```
+
+- **2026년 1월 6일로 끝나는 주간 보고서 생성:**
+  ```bash
+  python summarize_pnl.py --period weekly --date 2026-01-06
+  ```
+
+- **2026년 1월 월간 보고서 생성:**
+  ```bash
+  python summarize_pnl.py --period monthly --date 2026-01-06
+  ```
+
+### 3. 보고서 자동화 (Windows 작업 스케줄러)
+
+매일 밤 11시 59분에 `summarize_pnl.py`를 자동으로 실행하여 그날의 일일 보고서를 생성할 수 있습니다.
+
+1.  **명령 프롬프트(cmd) 또는 PowerShell을 관리자 권한으로 실행**합니다.
+2.  아래 명령어를 복사하여 붙여넣습니다. (Python 경로가 다른 경우 수정 필요)
+
+    ```powershell
+    schtasks /create /tn "Bybit PNL Summary" /tr "'C:\Users\1\AppData\Local\Programs\Python\Python314\python.exe' 'C:\Users\1\gemini\bybit\summarize_pnl.py'" /sc daily /st 23:59
+    ```
+    - 위 명령어는 초기 자본 입력 없이 실행되므로, `초기 자본 대비 수익률`은 보고서에 포함되지 않습니다.
+
+**참고:** 자동화된 보고서에는 초기 자본을 입력할 수 없으므로 `초기 자본 대비 수익률` 항목은 빠지게 됩니다.

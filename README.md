@@ -119,11 +119,17 @@ python summarize_pnl.py
 매일 밤 11시 59분에 `summarize_pnl.py`를 자동으로 실행하여 그날의 일일 보고서를 생성할 수 있습니다.
 
 1.  **명령 프롬프트(cmd) 또는 PowerShell을 관리자 권한으로 실행**합니다.
-2.  아래 명령어를 복사하여 붙여넣습니다. (Python 경로가 다른 경우 수정 필요)
+2.  아래 명령어 템플릿을 **사용자 환경에 맞게 수정한 후** 복사하여 붙여넣습니다.
 
     ```powershell
-    schtasks /create /tn "Bybit PNL Summary" /tr "'C:\Users\1\AppData\Local\Programs\Python\Python314\python.exe' 'C:\Users\1\gemini\bybit\summarize_pnl.py'" /sc daily /st 23:59
+    schtasks /create /tn "Bybit PNL Summary" /tr "'YOUR_PYTHON_PATH' 'YOUR_SCRIPT_PATH'" /sc daily /st 23:59
     ```
-    - 위 명령어는 초기 자본 입력 없이 실행되므로, `초기 자본 대비 수익률`은 보고서에 포함되지 않습니다.
+
+    **경로 확인 방법:**
+    -   `YOUR_PYTHON_PATH`: 사용 중인 파이썬 실행 파일의 전체 경로입니다. 터미널에서 아래 명령어로 확인할 수 있습니다.
+        ```bash
+        python -c "import sys; print(sys.executable)"
+        ```
+    -   `YOUR_SCRIPT_PATH`: `summarize_pnl.py` 파일의 전체 경로입니다. (예: `C:\Users\YourUser\Documents\bybit\summarize_pnl.py`)
 
 **참고:** 자동화된 보고서에는 초기 자본을 입력할 수 없으므로 `초기 자본 대비 수익률` 항목은 빠지게 됩니다.

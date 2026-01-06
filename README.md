@@ -65,19 +65,7 @@ LM_STUDIO_MODEL_NAME="YOUR_LM_STUDIO_MODEL_NAME" # (예: "gemma-2b-it-q8_0.gguf"
 
 ## 사용법 - P&L 보고서 생성
 
-P&L 보고서는 두 단계로 생성됩니다. 먼저 거래 데이터를 가져온 후, 해당 데이터를 바탕으로 요약 보고서를 생성합니다.
-
-### 1. 거래 데이터 가져오기 (`get_pnl.py`)
-
-Bybit API를 통해 모든 거래 내역을 가져와 `reports/pnl.csv` 파일에 저장합니다. 이 스크립트는 보고서 생성이 필요할 때마다 실행하여 최신 데이터를 유지할 수 있습니다.
-
-```bash
-python get_pnl.py
-```
-
-### 2. 요약 보고서 생성 (`summarize_pnl.py`)
-
-`pnl.csv` 파일을 분석하여 상세한 통계가 포함된 Markdown 형식의 보고서를 생성합니다.
+`summarize_pnl.py` 스크립트는 Bybit API를 통해 직접 거래 데이터를 가져온 후, 이를 분석하여 상세한 통계가 포함된 Markdown 형식의 보고서를 생성합니다.
 
 **기본 사용법 (오늘 날짜의 일일 보고서 생성):**
 ```bash

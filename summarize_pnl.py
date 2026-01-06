@@ -2,14 +2,53 @@ import pandas as pd
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import argparse
+import os
+from dotenv import load_dotenv
+from pybit.unified_trading import HTTP
 
 def summarize_pnl(period='daily', target_date_str=None, initial_capital=None):
     """
-    Reads P&L data and creates a summary report for the specified period,
+    Fetches P&L data from Bybit, then creates a summary report for the specified period,
     optionally calculating portfolio return based on provided initial capital.
     """
     try:
-        df = pd.read_csv("reports/pnl.csv")
+        # Load environment variables for API keys
+        load_dotenv()
+        api_key = os.getenv("BYBIT_API_KEY")
+        api_secret = os.getenv("BYBIT_API_SECRET")
+
+        if not all([api_key, api_secret]):
+            print("Error: BYBIT_API_KEY or BYBIT_API_SECRET not found in .env file.")
+            return
+
+        # Initialize Bybit HTTP client
+        session = HTTP(
+            testnet=False,
+            demo=True, # Assuming demo environment based on previous interactions
+            api_key=api_key,
+            api_secret=api_secret,
+        )
+
+        # Fetch closed P&L data
+        try:
+            response = session.get_closed_pnl(category="linear", limit=200) # Max limit to get all available data
+            pnl_data = response['result']['list']
+            
+            if not pnl_data:
+                print("No P&L data found from Bybit API.")
+                return
+
+            df = pd.DataFrame(pnl_data)
+
+            # Convert relevant columns to numeric type
+            df['closedPnl'] = pd.to_numeric(df['closedPnl'])
+            df['cumEntryValue'] = pd.to_numeric(df['cumEntryValue'])
+
+        except Exception as e:
+            print(f"Error fetching P&L data from Bybit API: {e}")
+            return
+
+        # Convert updatedTime to user's timezone (KST)
         df['updatedTime'] = pd.to_datetime(df['updatedTime'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Asia/Seoul')
 
         if target_date_str:
@@ -56,15 +95,13 @@ def summarize_pnl(period='daily', target_date_str=None, initial_capital=None):
         avg_profit = wins['closedPnl'].mean() if num_wins > 0 else 0
         avg_loss = losses['closedPnl'].mean() if num_losses > 0 else 0
         
-        avg_win_rate = (wins['closedPnl'] / wins['cumEntryValue']).mean() * 100 if num_wins > 0 and wins['cumEntryValue'].sum() > 0 else 0
-        avg_loss_rate = (losses['closedPnl'] / losses['cumEntryValue']).mean() * 100 if num_losses > 0 and losses['cumEntryValue'].sum() > 0 else 0
         return_on_volume_rate = (total_net_pnl / total_cum_entry_value) * 100 if total_cum_entry_value > 0 else 0
         
         portfolio_return_rate = None
         if initial_capital is not None and initial_capital > 0:
             portfolio_return_rate = (total_net_pnl / initial_capital) * 100
 
-        summary_df = period_trades[['updatedTime', 'symbol', 'side', 'closedPnl']].copy()
+        summary_df = period_trades[['updatedTime', 'symbol', 'side', 'closedPnl', 'cumEntryValue']].copy() # Include cumEntryValue for debugging if needed
         summary_df.rename(columns={
             'updatedTime': '시간', 'symbol': '심볼', 'side': '포지션', 'closedPnl': '순수익 (USDT)',
         }, inplace=True)
@@ -82,7 +119,7 @@ def summarize_pnl(period='daily', target_date_str=None, initial_capital=None):
                 f.write(f"- **초기 자본 대비 수익률:** **{portfolio_return_rate:.2f}%**\n")
             f.write("\n### 통계\n")
             f.write(f"- **평균 수익 (익절 시):** {avg_profit:.4f} USDT\n")
-            f.write(f"- **평균 손실 (손절 시):** {avg_loss:.4f} USDT\n\n")
+            f.write(f"- **평균 손실 (손절 시):** {avg_loss:.4f} USDT\n")
             f.write("---\n\n")
             f.write("## 거래 내역\n")
             report_table = summary_df[['시간', '심볼', '포지션', '순수익 (USDT)']]
@@ -90,8 +127,6 @@ def summarize_pnl(period='daily', target_date_str=None, initial_capital=None):
 
         print(f"P&L summary saved to {md_filename}")
 
-    except FileNotFoundError:
-        print("Error: reports/pnl.csv not found. Please run get_pnl.py first.")
     except Exception as e:
         print(f"An error occurred: {e}")
 

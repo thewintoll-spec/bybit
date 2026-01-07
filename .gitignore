@@ -3,6 +3,8 @@
 
 # Log files
 *.log
+btcusdt_trading_bot.txt
+ethusdt_trading_bot.txt
 
 # Python cache
 __pycache__/

@@ -45,7 +45,7 @@ def get_market_data_manual_ta(symbol="BTCUSDT", interval=15, limit=200):
         response = session.get_kline(
             category="linear",
             symbol=symbol,
-            interval=interval,
+            interval=str(interval),
             limit=effective_limit
         )
 

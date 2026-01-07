@@ -4,35 +4,45 @@ import os
 import pandas as pd
 import time
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from pybit.unified_trading import HTTP
 from pybit.exceptions import InvalidRequestError
 from market_data import get_market_data_manual_ta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
+import subprocess
+import re
 
-def setup_logger():
+# 전역 로거 객체 생성 (심볼은 main 함수에서 설정)
+logger = None
+
+# .env 파일 로드 및 API 키 설정
+load_dotenv()
+LM_STUDIO_ENDPOINT = "http://localhost:1234/v1/chat/completions"
+LM_STUDIO_MODEL_NAME = os.getenv('LM_STUDIO_MODEL_NAME')
+BYBIT_API_KEY = os.getenv('BYBIT_API_KEY')
+BYBIT_API_SECRET = os.getenv('BYBIT_API_SECRET')
+
+def setup_logger(symbol: str):
     """
     로그 설정을 초기화하고 로거 객체를 반환합니다.
+    심볼에 따라 로그 파일 이름을 동적으로 설정합니다.
     """
-    # 로거 생성
-    logger = logging.getLogger("TradingBot")
+    logger = logging.getLogger(f"TradingBot_{symbol}")
     logger.setLevel(logging.INFO)
 
-    # 이미 핸들러가 설정되어 있다면 중복 추가 방지
     if logger.hasHandlers():
         logger.handlers.clear()
 
-    # 로그 포맷 설정
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 
-    # 콘솔 핸들러 (터미널 출력)
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
-    # 파일 핸들러 (파일 기록)
-    file_handler = logging.FileHandler('trading_bot.log', encoding='utf-8')
+    # 로그 파일 이름 변경: .log 대신 .txt 사용
+    file_handler = logging.FileHandler(f"{symbol.lower()}_trading_bot.txt", encoding='utf-8')
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
 
@@ -43,6 +53,7 @@ def get_current_position(session: HTTP, symbol="BTCUSDT"):
     현재 열려있는 포지션 정보를 가져옵니다.
     :return: (포지션 사이드, 포지션 크기) 튜플 또는 (None, None)
     """
+    global logger # 전역 logger 사용 선언
     try:
         response = session.get_positions(category="linear", symbol=symbol)
         if response and response.get('retCode') == 0:
@@ -55,16 +66,6 @@ def get_current_position(session: HTTP, symbol="BTCUSDT"):
     except Exception as e:
         logger.error(f"포지션 정보 조회 중 오류 발생: {e}", exc_info=True)
     return None, None
-
-# 전역 로거 객체 생성
-logger = setup_logger()
-
-# .env 파일 로드 및 API 키 설정
-load_dotenv()
-LM_STUDIO_ENDPOINT = "http://localhost:1234/v1/chat/completions"
-LM_STUDIO_MODEL_NAME = os.getenv('LM_STUDIO_MODEL_NAME')
-BYBIT_API_KEY = os.getenv('BYBIT_API_KEY')
-BYBIT_API_SECRET = os.getenv('BYBIT_API_SECRET')
 
 
 def get_ai_decision(market_df: pd.DataFrame, current_pos_side: str, symbol: str) -> dict:
@@ -186,37 +187,6 @@ Here is the latest 15-minute candle data for {symbol}:
         logger.error(f"AI 결정 요청 중 오류 발생: {e}", exc_info=True)
         return None
 
-def close_all_positions(session: HTTP, symbol="BTCUSDT") -> bool:
-    """
-    특정 심볼의 모든 열린 선물 포지션을 시장가로 청산합니다.
-    """
-    logger.info(f"'{symbol}'의 모든 열린 포지션을 청산 시도하는 중...")
-    try:
-        side, size = get_current_position(session, symbol)
-        if not side:
-            logger.info("청산할 열린 포지션이 없습니다.")
-            return True
-
-        close_side = "Sell" if side == "LONG" else "Buy"
-        order = session.place_order(
-            category="linear",
-            symbol=symbol,
-            side=close_side,
-            orderType="Market",
-            qty=str(size),
-            reduceOnly=True
-        )
-        if order and order.get('retCode') == 0:
-            logger.info(f"✅ 포지션 청산 주문 성공! Order ID: {order['result']['orderId']}")
-            time.sleep(5) # 포지션이 완전히 청산될 시간을 줍니다.
-            return True
-        else:
-            logger.error(f"❌ 포지션 청산 주문 실패. 원인: {order.get('retMsg', 'Unknown error')}")
-            return False
-    except Exception as e:
-        logger.error(f"포지션 청산 중 예외 발생: {e}", exc_info=True)
-        return False
-
 def _place_order_common(session: HTTP, decision_data: dict, latest_data: pd.Series, is_adding: bool, symbol: str):
     """
     신규 주문 또는 추가 주문을 위한 공통 로직을 처리합니다.
@@ -272,8 +242,8 @@ def _place_order_common(session: HTTP, decision_data: dict, latest_data: pd.Seri
         
         balance_for_trading = available_balance
         if balance_for_trading <= 1 and wallet_balance > 1:
-            balance_for_trading = wallet_balance
             logger.warning("데모 환경 우회: '거래 가능 잔고'가 0이므로 '총 보유량'으로 주문 수량을 계산합니다.")
+            balance_for_trading = wallet_balance
         
         if balance_for_trading <= 1:
             logger.error("주문 실행 불가: 거래 가능한 잔고가 너무 적습니다.")
@@ -391,10 +361,137 @@ def execute_futures_trade(session: HTTP, decision_data: dict, market_df: pd.Data
             logger.error("포지션 전환 실패: 기존 포지션 청산에 실패했습니다.")
         return
 
+def generate_daily_pnl_report(session: HTTP, logger: logging.Logger, symbol: str, report_date: datetime.date, initial_capital: float = None):
+    """
+    Bybit API를 통해 P&L 데이터를 가져와 지정된 심볼과 날짜에 대한 일일 요약 보고서를 생성합니다.
+    """
+    try:
+        # Fetch closed P&L data for the specific symbol
+        # Increased limit for more data, but should eventually iterate through pages for full history
+        response = session.get_closed_pnl(category="linear", symbol=symbol, limit=1000)
+        pnl_data = response['result']['list']
+        
+        if not pnl_data:
+            logger.info(f"P&L 보고서 생성: {symbol}에 대한 P&L 데이터를 찾을 수 없습니다.")
+            return
+
+        df = pd.DataFrame(pnl_data)
+
+        df['closedPnl'] = pd.to_numeric(df['closedPnl'])
+        df['cumEntryValue'] = pd.to_numeric(df['cumEntryValue'])
+
+        df['updatedTime'] = pd.to_datetime(pd.to_numeric(df['updatedTime']), unit='ms').dt.tz_localize('UTC').dt.tz_convert('Asia/Seoul')
+
+        # Filter for the specific report_date
+        period_trades = df[df['updatedTime'].dt.date == report_date].copy()
+
+        report_symbol_tag = f"_{symbol}"
+        report_title_symbol = f" ({symbol})"
+        report_period_str = report_date.strftime('%Y-%m-%d')
+        md_filename = f"reports/pnl_summary_daily_{report_period_str}{report_symbol_tag}.md"
+            
+        if period_trades.empty:
+            logger.info(f"보고서 생성: {report_period_str}{report_title_symbol} 기간에 거래 내역이 없습니다.")
+            with open(md_filename, 'w', encoding='utf-8') as f:
+                f.write(f"# P&L 요약 ({report_period_str}){report_title_symbol}\n\n")
+                f.write("해당 기간에 거래 내역이 없습니다.\n")
+            logger.info(f"{md_filename}가 생성되었습니다.")
+            return
+
+        total_trades = len(period_trades)
+        wins = period_trades[period_trades['closedPnl'] > 0]
+        losses = period_trades[period_trades['closedPnl'] <= 0]
+        
+        num_wins = len(wins)
+        num_losses = len(losses)
+        win_rate = (num_wins / total_trades) * 100 if total_trades > 0 else 0
+        total_net_pnl = period_trades['closedPnl'].sum()
+        total_cum_entry_value = period_trades['cumEntryValue'].sum()
+
+        avg_profit = wins['closedPnl'].mean() if num_wins > 0 else 0
+        avg_loss = losses['closedPnl'].mean() if num_losses > 0 else 0
+        
+        portfolio_return_rate = None
+        if initial_capital is not None and initial_capital > 0:
+            portfolio_return_rate = (total_net_pnl / initial_capital) * 100
+
+        summary_df = period_trades[['updatedTime', 'symbol', 'side', 'closedPnl']].copy()
+        summary_df.rename(columns={
+            'updatedTime': '시간', 'symbol': '심볼', 'side': '포지션', 'closedPnl': '순수익 (USDT)',
+        }, inplace=True)
+        summary_df['포지션'] = summary_df['포지션'].map({'Sell': 'Long (청산)', 'Buy': 'Short (청산)'}).fillna(summary_df['포지션'])
+        summary_df['시간'] = summary_df['시간'].dt.strftime('%Y-%m-%d %H:%M:%S')
+
+        with open(md_filename, 'w', encoding='utf-8') as f:
+            f.write(f"# P&L 요약 ({report_period_str}){report_title_symbol}\n\n")
+            f.write("## 요약\n")
+            f.write(f"- **총 거래:** {total_trades}회\n")
+            f.write(f"- **승리:** {num_wins}회 / **패배:** {num_losses}회\n")
+            f.write(f"- **승률:** {win_rate:.2f}%\n")
+            f.write(f"- **최종 순수익:** **{total_net_pnl:.4f} USDT**\n")
+            if portfolio_return_rate is not None:
+                f.write(f"- **초기 자본 대비 수익률:** **{portfolio_return_rate:.2f}%**\n")
+            f.write("\n### 통계\n")
+            f.write(f"- **평균 수익 (익절 시):** {avg_profit:.4f} USDT\n")
+            f.write(f"- **평균 손실 (손절 시):** {avg_loss:.4f} USDT\n")
+            f.write("---\n\n")
+            f.write("## 거래 내역\n")
+            report_table = summary_df[['시간', '심볼', '포지션', '순수익 (USDT)']]
+            f.write(report_table.to_markdown(index=False))
+
+        logger.info(f"P&L summary saved to {md_filename}")
+
+    except Exception as e:
+        logger.error(f"P&L 보고서 생성 중 오류 발생: {e}", exc_info=True)
+
+def get_initial_capital_from_script():
+    """
+    check_balance.py를 실행하여 초기 자본(USDT 잔고)을 가져옵니다.
+    """
+    global logger
+    try:
+        # check_balance.py 스크립트 실행
+        result = subprocess.run(
+            ['python', 'check_balance.py'], 
+            capture_output=True, 
+            text=True, 
+            check=True, 
+            encoding='utf-8'
+        )
+        
+        # 스크립트 출력에서 잔고 파싱
+        output = result.stdout
+        
+        # "USDT Balance: <value>" 라인 찾기
+        match = re.search(r"USDT Balance: (\d+\.?\d*)", output)
+        
+        if match:
+            balance_str = match.group(1)
+            balance = float(balance_str)
+            logger.info(f"check_balance.py를 통해 확인된 초기 자본: {balance} USDT")
+            return balance
+        else:
+            logger.error("check_balance.py 출력에서 USDT 잔고를 찾을 수 없습니다.")
+            logger.debug(f"check_balance.py 전체 출력:\n{output}")
+            return None
+            
+    except FileNotFoundError:
+        logger.error("python을 실행할 수 없습니다. PATH에 python이 설정되어 있는지 확인하세요.")
+        return None
+    except subprocess.CalledProcessError as e:
+        logger.error(f"check_balance.py 실행 중 오류 발생: {e.stderr}")
+        return None
+    except Exception as e:
+        logger.error(f"초기 자본을 가져오는 중 예외 발생: {e}", exc_info=True)
+        return None
+
+
 def main():
     """
     메인 자동매매 로직 실행
     """
+    global logger # 전역 logger 사용 선언
+
     # 심볼 선택
     symbol_map = {"1": "BTCUSDT", "2": "ETHUSDT"}
     
@@ -406,6 +503,8 @@ def main():
         else:
             print("잘못된 선택입니다. 1 또는 2를 입력해주세요.")
 
+    logger = setup_logger(symbol) # 선택된 심볼로 로거 초기화
+
     logger.info("="*60)
     logger.info(f"Bybit 지능형 자동매매 봇 ({symbol})을 시작합니다. (종료: Ctrl+C)")
     logger.info("="*60)
@@ -413,6 +512,16 @@ def main():
     if not all([BYBIT_API_KEY, BYBIT_API_SECRET]):
         logger.critical(".env 파일에서 API 키를 찾을 수 없습니다. 프로그램을 종료합니다.")
         return
+
+    # 초기 자본 설정
+    logger.info("check_balance.py를 실행하여 초기 자본을 확인합니다...")
+    initial_capital = get_initial_capital_from_script()
+
+    if initial_capital is None:
+        logger.warning("초기 자본을 자동으로 확인할 수 없습니다. P&L 보고서의 수익률 계산이 비활성화됩니다.")
+    
+    # 마지막 보고서 생성 날짜 추적
+    last_report_date = datetime.now(tz=ZoneInfo("Asia/Seoul")).date() - timedelta(days=1) # 봇 시작 시 이전 날짜로 설정하여 시작 즉시 보고서 생성 방지
 
     try:
         bybit_session = HTTP(testnet=False, demo=True, api_key=BYBIT_API_KEY, api_secret=BYBIT_API_SECRET)
@@ -425,52 +534,54 @@ def main():
 
     while True:
         try:
-            logger.info("-" * 60)
-            logger.info(f"새로운 매매 사이클 시작 ({symbol})...")
-            
-            # 1. 시장 데이터 가져오기
-            market_df = get_market_data_manual_ta(symbol=symbol)
-            if market_df is None or market_df.empty:
-                logger.error("시장 데이터를 가져오지 못했습니다. 다음 사이클까지 대기합니다.")
-                time.sleep(60)
-                continue
+            current_date_kst = datetime.now(tz=ZoneInfo("Asia/Seoul")).date()
+            if current_date_kst > last_report_date:
+                # 자정에 이전 날짜의 보고서 생성
+                report_for_date = last_report_date
+                logger.info(f"자정 이후, 이전 날짜({report_for_date})에 대한 P&L 보고서를 생성합니다.")
+                generate_daily_pnl_report(bybit_session, logger, symbol, report_for_date, initial_capital)
+                last_report_date = current_date_kst # 보고서 생성 날짜 업데이트
+                logger.info(f"현재 날짜({current_date_kst})로 마지막 보고서 생성 날짜를 업데이트했습니다.")
 
-            # 데이터 유효성 검사 (RSI, SMA 계산 확인)
-            if market_df.iloc[-1][['RSI_14', 'SMA_20']].isnull().any():
-                logger.warning("기술 지표가 아직 계산되지 않았습니다 (데이터 부족). 다음 사이클까지 대기합니다.")
-                time.sleep(60)
+            logger.info("-" * 60)
+            logger.info(f"[{datetime.now(tz=ZoneInfo('Asia/Seoul')).strftime('%Y-%m-%d %H:%M:%S')}] 새로운 사이클 시작")
+
+            # 1. 시장 데이터 가져오기
+            market_df = get_market_data_manual_ta(symbol, '15', 100)
+
+            if market_df is None or market_df.empty:
+                logger.warning("시장 데이터를 가져올 수 없습니다. 다음 사이클까지 대기합니다.")
+                time.sleep(60) # 데이터 못가져오면 1분 대기
                 continue
-            
-            logger.info("최신 시장 데이터 확인 완료.")
 
             # 2. 현재 포지션 확인
             current_pos_side, current_pos_size = get_current_position(bybit_session, symbol=symbol)
             if current_pos_side:
-                logger.info(f"현재 {symbol} 포지션: {current_pos_side} (크기: {current_pos_size})")
+                logger.info(f"현재 포지션: {current_pos_side}, 크기: {current_pos_size}")
             else:
-                logger.info(f"현재 {symbol} 보유 포지션 없음.")
+                logger.info("현재 보유 포지션 없음.")
 
-            # 3. AI에게 매매 결정 요청
-            logger.info("AI 에이전트에게 매매 결정을 요청하는 중...")
-            ai_result = get_ai_decision(market_df, current_pos_side, symbol=symbol)
+            # 3. AI에게 결정 요청
+            logger.info("AI 에이전트에게 매매 결정을 요청합니다...")
+            ai_decision_data = get_ai_decision(market_df, current_pos_side, symbol)
 
-            # 4. AI 결정에 따른 거래 실행
-            if ai_result:
-                decision_details = f"🤖 AI 결정: " + ", ".join(f"'{k}': '{v}'" for k, v in ai_result.items())
-                logger.info(decision_details)
-                execute_futures_trade(bybit_session, ai_result, market_df, current_pos_side, current_pos_size, symbol=symbol)
+            # 4. 결정에 따른 매매 실행
+            if ai_decision_data and ai_decision_data.get('decision'):
+                logger.info(f"AI 결정 수신: {ai_decision_data.get('decision')}")
+                execute_futures_trade(bybit_session, ai_decision_data, market_df, current_pos_side, current_pos_size, symbol)
             else:
-                logger.error("AI로부터 유효한 결정을 받아오지 못했습니다.")
+                logger.warning("AI로부터 유효한 결정을 받지 못했습니다. 다음 사이클까지 대기합니다.")
 
-            logger.info(f"사이클 완료. 다음 사이클까지 15분 대기합니다...")
-            time.sleep(15 * 60)
+            # 다음 사이클 대기 (15분)
+            logger.info("다음 사이클까지 15분 대기합니다...")
+            time.sleep(900)
 
         except KeyboardInterrupt:
-            logger.info("사용자에 의해 프로그램이 중단되었습니다. 자동매매 봇을 종료합니다.")
+            logger.info("사용자에 의해 프로그램이 중단되었습니다.")
             break
         except Exception as e:
-            logger.critical(f"메인 루프에서 예상치 못한 오류 발생: {e}", exc_info=True)
-            logger.info("60초 후 다음 사이클을 시도합니다.")
+            logger.error(f"메인 루프에서 예상치 못한 오류 발생: {e}", exc_info=True)
+            logger.info("1분 후 재시도합니다...")
             time.sleep(60)
 
 if __name__ == "__main__":

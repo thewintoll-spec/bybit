@@ -305,6 +305,52 @@ def _place_order_common(session: HTTP, decision_data: dict, latest_data: pd.Seri
     except Exception as e:
         logger.error(f"주문 실행 중 예외 발생: {e}", exc_info=True)
 
+def close_all_positions(session: HTTP, symbol: str) -> bool:
+    """
+    특정 심볼에 대한 모든 포지션을 즉시 종료합니다.
+    """
+    global logger
+    try:
+        # 현재 포지션 정보 가져오기
+        pos_side, pos_size = get_current_position(session, symbol)
+        
+        if not pos_side or pos_size == 0:
+            logger.info(f"{symbol}에 대한 활성화된 포지션이 없어 종료 절차를 건너뜁니다.")
+            return True
+
+        # 반대 사이드 설정
+        close_side = "Sell" if pos_side == 'LONG' else "Buy"
+        
+        # 포지션 전체를 종료하는 주문 실행
+        logger.info(f"포지션 종료 주문 실행: {close_side} {pos_size} {symbol}")
+        order = session.place_order(
+            category="linear",
+            symbol=symbol,
+            side=close_side,
+            orderType="Market",
+            qty=str(pos_size),
+            reduceOnly=True  # 포지션을 감소시키는 주문으로 설정
+        )
+
+        if order and order.get('retCode') == 0:
+            logger.info(f"✅ 포지션 종료 주문 성공! Order ID: {order['result']['orderId']}")
+            # 포지션이 완전히 종료될 때까지 잠시 대기
+            time.sleep(5) # 5초 대기 후 포지션 재확인
+            final_pos_side, final_pos_size = get_current_position(session, symbol)
+            if final_pos_size == 0:
+                logger.info("포지션이 성공적으로 종료되었습니다.")
+                return True
+            else:
+                logger.warning(f"포지션 종료 후에도 잔여 포지션이 남아있습니다: {final_pos_side} {final_pos_size}")
+                return False
+        else:
+            logger.error(f"❌ 포지션 종료 주문 실패. 원인: {order.get('retMsg', 'Unknown error')}")
+            return False
+
+    except Exception as e:
+        logger.error(f"포지션 종료 중 예외 발생: {e}", exc_info=True)
+        return False
+
 def execute_futures_trade(session: HTTP, decision_data: dict, market_df: pd.DataFrame, current_pos_side: str, current_pos_size: Decimal, symbol: str):
     """
     AI 결정과 현재 포지션에 따라 지능적으로 매매를 실행합니다.
